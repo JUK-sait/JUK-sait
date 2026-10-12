@@ -61,8 +61,10 @@ Google Drive にはパス一括解決 API が無いため、gdrivefs は **親�
 - **書き込み系（writeFile / mkdir / mv / rm / cp / appendFile）は `fresh: true`** で
   キャッシュを迂回し、常に最新の一覧で解決する。これにより「外部でリネームされた古いパスへ
   書き込むと移動先に紛れ込む」事故を防ぐ
-- 読み取り系（`stat` / `exists` / `list`）は TTL 内のキャッシュを使うため、外部変更は
-  最大 `cacheTtlMs` 遅れて見える。厳密性が必要なら `cacheTtlMs: 0` を指定する
+- キャッシュを使うのは `resolve()` を通る操作（`stat` / `exists` / `readFile` など）。
+  `list` / `walk` / `tree` / `find` / `du` は常にバックエンドから直接取得する（最新だが毎回リクエスト）
+- そのため外部変更は読み取り系で最大 `cacheTtlMs` 遅れて見える。厳密性が必要なら `cacheTtlMs: 0`
+  （キャッシュ完全無効。`cacheTtlMs <= 0` のときはキャッシュに積まない）
 - キャッシュは `maxCacheEntries`（既定 5000）で古い順に破棄される
 
 `listChildren` は Google バックエンドでは `q = 'parent' in parents and trashed = false` の
@@ -166,6 +168,7 @@ Drive は POSIX ファイルシステムではない。以下は **意図的に�
 | 自己参照の移動/コピー | `mv`/`cp` はフォルダを自分の配下へ入れる操作を `EINVALIDPATH` で拒否する |
 | キャッシュ | 子リストキャッシュは TTL 内の外部変更（削除/リネーム/ゴミ箱）を見ない。読み取りは最大 `cacheTtlMs` 遅れる（書き込みは常に fresh）。`cacheTtlMs: 0` で無効化、`maxCacheEntries`（既定 5000）で上限管理 |
 | 同期の削除 | `sync --delete` のリモート削除は **完全削除**（ゴミ箱を経由しない）。取り消せないため `--dry-run` での確認を推奨 |
+| 読み取りのキャッシュ | `stat`/`exists`/`readFile` は TTL 内の外部変更を見ない。`readFile` は「サイズ > 0 なのに 0 バイト」を検出したら fresh で再解決して `ENOENT` を返す |
 | 同期の検出粒度 | マニフェストのハッシュはスキャン時点の値。スキャン〜転送中の変更は次回同期まで検出されない |
 | マニフェストの同一性 | `remoteRoot` と `rootId`（ルートフォルダ ID）を記録し、どちらかが変わったら差分をリセットして警告する |
 | レート制限 | 1 ユーザあたり約 12,000 リクエスト/分。`concurrency` で並列度を調整可能 |

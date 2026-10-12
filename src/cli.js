@@ -210,6 +210,14 @@ export async function main(argv, io = {}) {
     return command ? 0 : 2;
   }
 
+  try {
+    validateOptions(options);
+  } catch (error) {
+    out.err(error.message);
+    out.err('`gdrivefs help` を参照してください。');
+    return 2;
+  }
+
   /** @type {DriveFs} */
   let fs;
   let persist;
@@ -221,15 +229,7 @@ export async function main(argv, io = {}) {
     }
   } catch (error) {
     out.err(`初期化に失敗しました: ${error.message}`);
-    return 1;
-  }
-
-  try {
-    validateOptions(options);
-  } catch (error) {
-    out.err(error.message);
-    out.err('`gdrivefs help` を参照してください。');
-    return 2;
+    return error?.code === 'EUSAGE' ? 2 : 1;
   }
 
   const context = { fs, out, flags, options, positionals, io, env };
@@ -283,7 +283,16 @@ export async function main(argv, io = {}) {
     }
     return 1;
   } finally {
-    if (persist) await persist();
+    if (persist) {
+      try {
+        await persist();
+      } catch (error) {
+        out.err(
+          `エラー [${error?.code ?? 'EPERSIST'}] 状態の保存に失敗しました: ${error?.message}`,
+        );
+        process.exitCode = 1;
+      }
+    }
   }
 }
 

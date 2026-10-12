@@ -124,6 +124,15 @@ describe('MemoryBackend', () => {
     assert.equal(restored.nodes.has(created.id), true);
   });
 
+  it('壊れた保存データは明確なエラーで拒否する', () => {
+    assert.throws(() => MemoryBackend.fromSerializable(null), /保存データが不正/);
+    assert.throws(() => MemoryBackend.fromSerializable({ nodes: [] }), /保存データが不正/);
+    assert.throws(
+      () => MemoryBackend.fromSerializable({ nodes: [['a', {}]], blobs: 'oops' }),
+      /保存データが不正/,
+    );
+  });
+
   it('toBuffer は文字列/バイト列を扱い、他は拒否する', () => {
     assert.deepEqual(toBuffer('abc'), Buffer.from('abc'));
     assert.deepEqual(toBuffer(new Uint8Array([1])), Buffer.from([1]));

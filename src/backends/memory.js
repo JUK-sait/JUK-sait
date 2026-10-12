@@ -321,6 +321,17 @@ export class MemoryBackend extends DriveBackend {
    * @returns {MemoryBackend}
    */
   static fromSerializable(data, now) {
+    if (!data || typeof data !== 'object' || !Array.isArray(data.nodes) || data.nodes.length === 0) {
+      throw new InvalidPathError(
+        'メモリバックエンドの保存データが不正です (nodes が空または形式違い)',
+        { code: 'EUSAGE' },
+      );
+    }
+    if (!Array.isArray(data.blobs ?? [])) {
+      throw new InvalidPathError('メモリバックエンドの保存データが不正です (blobs)', {
+        code: 'EUSAGE',
+      });
+    }
     const backend = new MemoryBackend(now ? { now } : {});
     if (data?.rootId) backend._rootId = data.rootId;
     backend.nodes = new Map((data?.nodes ?? []).map(([k, v]) => [k, { ...v }]));

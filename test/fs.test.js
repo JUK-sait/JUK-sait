@@ -140,6 +140,23 @@ describe('DriveFs 並行実行と自己参照の防止', () => {
     );
   });
 
+  it('appendFile は親フォルダが無くても自動作成する', async () => {
+    const fs = makeFs();
+    await fs.appendFile('/deep/app/log.txt', 'line1\n');
+    await fs.appendFile('/deep/app/log.txt', 'line2\n');
+    assert.equal(await fs.readText('/deep/app/log.txt'), 'line1\nline2\n');
+  });
+
+  it('外部で消えたファイルの読み取りは空文字ではなく ENOENT になる', async () => {
+    const backend = new MemoryBackend();
+    const fsA = new DriveFs({ backend });
+    const fsB = new DriveFs({ backend });
+    await fsA.writeFile('/e/f.txt', 'content');
+    await fsA.stat('/e/f.txt'); // キャッシュを作る
+    await fsB.rm('/e/f.txt');
+    await assert.rejects(() => fsA.readText('/e/f.txt'), NotFoundError);
+  });
+
   it('同名のファイルとフォルダを並行作成しても共存しない', async () => {
     for (let i = 0; i < 10; i += 1) {
       const fs = makeFs();

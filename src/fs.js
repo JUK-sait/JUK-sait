@@ -76,6 +76,7 @@ export class DriveFs {
       // 同名重複は最初の 1 件を採用 (§5 の制約)
       if (!children.has(node.name)) children.set(node.name, node);
     }
+    if (this.cacheTtlMs <= 0) return children;
     this._listingCache.delete(parentId);
     this._listingCache.set(parentId, {
       children,
@@ -300,6 +301,15 @@ export class DriveFs {
     }
     const data = await this.backend.download(node.id, { node });
     if (data === null) throw new NotFoundError(`読み込みに失敗しました: ${path}`, { path });
+    if (data.length === 0 && (node.size ?? 0) > 0) {
+      // キャッシュが古く、実体が既に消えている/置き換わっている可能性がある
+      const fresh = await this.resolve(input, { mustExist: true, fresh: true });
+      const retried = await this.backend.download(fresh.id, { node: fresh.node });
+      if (retried === null || (retried.length === 0 && (fresh.node.size ?? 0) > 0)) {
+        throw new NotFoundError(`読み込みに失敗しました (実体がありません): ${path}`, { path });
+      }
+      return retried;
+    }
     return data;
   }
 
@@ -564,7 +574,14 @@ export class DriveFs {
     const addition = toBuffer(content) ?? Buffer.alloc(0);
     return this._withLock(normalized, async () => {
       let previous = Buffer.alloc(0);
-      const resolved = await this.resolve(normalized, { mustExist: false, fresh: true });
+      let resolved;
+      try {
+        resolved = await this.resolve(normalized, { mustExist: false, fresh: true });
+      } catch (error) {
+        // 中間フォルダが無い場合も「新規作成」として扱う (writeFile が親を作る)
+        if (error instanceof NotFoundError) resolved = { node: null, id: null };
+        else throw error;
+      }
       if (resolved.node) {
         if (DriveFs.isFolder(resolved.node)) {
           throw new NotAFileError(`フォルダには追記できません: ${normalized}`, {

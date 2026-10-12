@@ -58,6 +58,7 @@ export function createDriveFs(options = {}) {
     backend,
     cacheTtlMs: options.cacheTtlMs,
     defaultPageSize: options.defaultPageSize,
+    maxCacheEntries: options.maxCacheEntries,
   });
 }
 

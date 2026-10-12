@@ -102,6 +102,7 @@ export class DriveSync {
           this.manifest = { version: 1, remoteRoot: this.remoteRoot, rootId, entries: {} };
           return this.manifest;
         }
+        if (!parsed.rootId) delete parsed.rootId;
         this.manifest = { version: 1, remoteRoot: this.remoteRoot, rootId, ...parsed };
       }
     } catch (error) {
