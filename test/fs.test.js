@@ -5,6 +5,7 @@ import { DriveFs } from '../src/fs.js';
 import { MemoryBackend } from '../src/backends/memory.js';
 import {
   AlreadyExistsError,
+  InvalidPathError,
   NotADirectoryError,
   NotAFileError,
   NotFoundError,
@@ -75,6 +76,49 @@ describe('DriveFs 基本操作', () => {
   });
 });
 
+
+describe('DriveFs 並行実行と自己参照の防止', () => {
+  it('同じ新規フォルダへ並行書き込みしてもフォルダは 1 つだけ', async () => {
+    const fs = makeFs();
+    await Promise.all(
+      Array.from({ length: 50 }, (_, i) => fs.writeFile(`/many/f${i}.txt`, String(i))),
+    );
+    const rootChildren = await fs.list('/');
+    assert.equal(rootChildren.filter((n) => n.name === 'many').length, 1);
+    assert.equal((await fs.list('/many')).length, 50);
+  });
+
+  it('mv で自分自身の配下へは移動できない', async () => {
+    const fs = makeFs();
+    await fs.writeFile('/a/f.txt', 'x');
+    await assert.rejects(() => fs.mv('/a', '/a/b'), InvalidPathError);
+    assert.equal(await fs.readText('/a/f.txt'), 'x');
+  });
+
+  it('cp で自分自身の配下へはコピーできない', async () => {
+    const fs = makeFs();
+    await fs.writeFile('/a/f.txt', 'x');
+    await assert.rejects(() => fs.cp('/a', '/a/sub'), InvalidPathError);
+    assert.equal(await fs.exists('/a/sub'), false);
+  });
+
+  it('cp でフォルダ展開後も同一パスになる場合は EEXIST', async () => {
+    const fs = makeFs();
+    await fs.writeFile('/a/f.txt', 'x');
+    await assert.rejects(() => fs.cp('/a/f.txt', '/a'), AlreadyExistsError);
+  });
+
+  it('外部で削除されたフォルダはキャッシュがあっても ENOENT になる', async () => {
+    const backend = new MemoryBackend();
+    const fsA = new DriveFs({ backend });
+    const fsB = new DriveFs({ backend });
+    await fsA.writeFile('/a/f.txt', 'x');
+    assert.equal(await fsA.exists('/a'), true);
+    await fsB.rm('/a', { recursive: true });
+    assert.equal(await fsA.exists('/a'), false);
+    await assert.rejects(() => fsA.stat('/a'), NotFoundError);
+  });
+});
 
 describe('DriveFs 解決と一覧', () => {
   /** @type {DriveFs} */

@@ -27,7 +27,7 @@ gdrivefs sync ./data /backup --delete       # 双方向ミラー
 ```bash
 git clone https://github.com/JUK-sait/JUK-sait.git gdrivefs
 cd gdrivefs
-npm test          # 認証不要。112 件のテストが走ります
+npm test          # 認証不要。123 件のテストが走ります
 npm link          # `gdrivefs` コマンドを PATH に入れる場合
 ```
 
@@ -102,6 +102,9 @@ gdrivefs sync ./data /backup --direction push --delete
 gdrivefs sync /backup ./data --direction pull --conflict remote
 ```
 
+> `--delete` のリモート削除は **完全削除**（ゴミ箱を経由しません）。
+> まず `--dry-run` で実行内容を確認することを推奨します。
+
 ## CLI コマンド一覧
 
 | コマンド | 内容 |
@@ -131,7 +134,7 @@ gdrivefs sync /backup ./data --direction pull --conflict remote
 ## テスト
 
 ```bash
-npm test              # node:test による 112 件
+npm test              # node:test による 123 件
 npm run lint          # 全ファイルの構文チェック
 npm run test:coverage
 ```

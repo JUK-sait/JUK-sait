@@ -13,10 +13,11 @@
  * ```
  */
 
-import { FOLDER_MIME, guessMimeType } from './mime.js';
+import { FOLDER_MIME, guessMimeType, isGoogleNative } from './mime.js';
 import {
   AlreadyExistsError,
   DriveFsError,
+  InvalidPathError,
   NotADirectoryError,
   NotAFileError,
   NotFoundError,
@@ -35,11 +36,12 @@ export class DriveFs {
    *   defaultPageSize?: number,
    * }} params
    */
-  constructor({ backend, cacheTtlMs = 30_000, defaultPageSize = 1000 } = {}) {
+  constructor({ backend, cacheTtlMs = 30_000, defaultPageSize = 1000, maxCacheEntries = 5000 } = {}) {
     if (!backend) throw new DriveFsError('backend が必要です');
     this.backend = backend;
     this.cacheTtlMs = cacheTtlMs;
     this.defaultPageSize = defaultPageSize;
+    this.maxCacheEntries = maxCacheEntries;
     /** @type {Map<string, { id: string, expiresAt: number }>} パス -> フォルダ ID */
     this._dirCache = new Map();
     /** @type {Map<string, Promise<unknown>>} パス単位の排他制御 */
@@ -49,6 +51,21 @@ export class DriveFs {
   /** キャッシュを捨てる。 */
   invalidateCache() {
     this._dirCache.clear();
+  }
+
+  /**
+   * 解決結果をキャッシュする (上限を超えたら古いものから捨てる)。
+   * @param {string} key
+   * @param {string} id
+   */
+  _cacheSet(key, id) {
+    this._dirCache.delete(key);
+    this._dirCache.set(key, { id, expiresAt: Date.now() + this.cacheTtlMs });
+    while (this._dirCache.size > this.maxCacheEntries) {
+      const oldest = this._dirCache.keys().next();
+      if (oldest.done) break;
+      this._dirCache.delete(oldest.value);
+    }
   }
 
   /** ルートの ID。 */
@@ -92,9 +109,14 @@ export class DriveFs {
 
       const cached = this._dirCache.get(currentPath);
       if (cached && cached.expiresAt > Date.now()) {
-        parentId = cached.id;
-        if (isLast) lastNode = await this.backend.getNode(cached.id);
-        continue;
+        const cachedNode = await this.backend.getNode(cached.id);
+        if (cachedNode) {
+          parentId = cached.id;
+          if (isLast) lastNode = cachedNode;
+          continue;
+        }
+        // 外部 (別プロセス/Web UI) で削除されていた場合はキャッシュを捨てて辿り直す
+        this._dirCache.delete(currentPath);
       }
 
       const child = await this.backend.findChild(parentId, segment);
@@ -110,10 +132,7 @@ export class DriveFs {
         });
       }
       if (child.mimeType === FOLDER_MIME) {
-        this._dirCache.set(currentPath, {
-          id: child.id,
-          expiresAt: Date.now() + this.cacheTtlMs,
-        });
+        this._cacheSet(currentPath, child.id);
       }
       parentId = child.id;
       lastNode = child;
@@ -147,26 +166,29 @@ export class DriveFs {
     for (const segment of pathUtil.segments(normalized)) {
       pathUtil.validateSegment(segment);
       currentPath = `${currentPath}/${segment}`;
-      const cached = this._dirCache.get(currentPath);
-      if (cached && cached.expiresAt > Date.now()) {
-        parentId = cached.id;
-        continue;
-      }
-      const existing = await this.backend.findChild(parentId, segment);
-      if (existing) {
-        if (existing.mimeType !== FOLDER_MIME) {
-          throw new NotADirectoryError(`フォルダではありません: ${currentPath}`, {
-            path: currentPath,
-          });
+      const parent = parentId;
+      // 同じフォルダを並行して作ると Drive 上に同名フォルダが量産されるため直列化する
+      parentId = await this._withLock(`dir:${currentPath}`, async () => {
+        const cached = this._dirCache.get(currentPath);
+        if (cached && cached.expiresAt > Date.now()) return cached.id;
+        const existing = await this.backend.findChild(parent, segment);
+        let id;
+        if (existing) {
+          if (existing.mimeType !== FOLDER_MIME) {
+            throw new NotADirectoryError(`フォルダではありません: ${currentPath}`, {
+              path: currentPath,
+            });
+          }
+          id = existing.id;
+        } else if (create) {
+          const created = await this.backend.createFolder({ name: segment, parentId: parent });
+          id = created.id;
+        } else {
+          throw new NotFoundError(`フォルダがありません: ${currentPath}`, { path: currentPath });
         }
-        parentId = existing.id;
-      } else if (create) {
-        const created = await this.backend.createFolder({ name: segment, parentId });
-        parentId = created.id;
-      } else {
-        throw new NotFoundError(`フォルダがありません: ${currentPath}`, { path: currentPath });
-      }
-      this._dirCache.set(currentPath, { id: parentId, expiresAt: Date.now() + this.cacheTtlMs });
+        this._cacheSet(currentPath, id);
+        return id;
+      });
     }
     return parentId;
   }
@@ -476,10 +498,13 @@ export class DriveFs {
           path: normalized,
         });
       }
+      // Google ネイティブ形式 (Docs/Sheets 等) の mimeType を勝手に変えない
+      const shouldSendMime =
+        options.mimeType !== undefined || !isGoogleNative(existing.mimeType);
       const updated = await this.backend.updateFile({
         id: existing.id,
         content: body,
-        mimeType,
+        ...(shouldSendMime ? { mimeType } : {}),
         ...(options.appProperties ? { appProperties: options.appProperties } : {}),
       });
       return { ...updated, path: normalized };
@@ -598,6 +623,13 @@ export class DriveFs {
       if (DriveFs.isFolder(targetNode)) target = pathUtil.join(target, sourceNode.name);
     }
 
+    if (DriveFs.isFolder(sourceNode) && pathUtil.contains(source, target)) {
+      throw new InvalidPathError(
+        `フォルダを自分自身の配下へ移動できません: ${source} -> ${target}`,
+        { path: source, details: { target } },
+      );
+    }
+
     const targetParent = pathUtil.dirname(target);
     const targetName = pathUtil.basename(target);
     pathUtil.validateSegment(targetName);
@@ -641,6 +673,16 @@ export class DriveFs {
     if (await this.exists(target)) {
       const targetNode = await this.stat(target);
       if (DriveFs.isFolder(targetNode)) target = pathUtil.join(target, sourceNode.name);
+    }
+
+    if (target === source) {
+      throw new AlreadyExistsError(`同一パスにはコピーできません: ${source}`, { path: source });
+    }
+    if (DriveFs.isFolder(sourceNode) && pathUtil.contains(source, target)) {
+      throw new InvalidPathError(
+        `フォルダを自分自身の配下へコピーできません: ${source} -> ${target}`,
+        { path: source, details: { target } },
+      );
     }
 
     if (!DriveFs.isFolder(sourceNode)) {

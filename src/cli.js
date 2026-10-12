@@ -263,6 +263,10 @@ export async function main(argv, io = {}) {
   } catch (error) {
     if (error instanceof DriveFsError) {
       out.err(`エラー [${error.code}] ${error.message}`);
+      if (error.code === 'EUSAGE') {
+        out.err('`gdrivefs help` を参照してください。');
+        return 2;
+      }
     } else {
       out.err(`予期しないエラー: ${error?.stack ?? error}`);
     }
@@ -592,9 +596,14 @@ async function cmdGet({ fs, out, positionals, flags, io }) {
   let remotes = positionals;
   let destination = '.';
   const last = positionals[positionals.length - 1];
-  if (positionals.length >= 2 && !last.startsWith('/')) {
-    destination = last;
-    remotes = positionals.slice(0, -1);
+  if (positionals.length >= 2) {
+    // 最後の引数が Drive 上に存在しないならローカルの宛先とみなす
+    // (絶対パスのローカルディレクトリも指定できるようにするため)
+    const looksRemote = last.startsWith('/') && (await fs.exists(last));
+    if (!looksRemote) {
+      destination = last;
+      remotes = positionals.slice(0, -1);
+    }
   }
   const destRoot = path.resolve(io.cwd ?? process.cwd(), destination);
 
@@ -678,6 +687,7 @@ async function cmdSync({ fs, out, positionals, flags, options, io }) {
     out.out(JSON.stringify(report, null, 2));
     return report.errors.length > 0 ? 1 : 0;
   }
+  for (const warning of report.warnings ?? []) out.err(`警告: ${warning}`);
   if (report.dryRun) out.out('--- dry-run (実行していません) ---');
   for (const item of report.planned) {
     out.out(`${item.action.padEnd(14)} ${item.relativePath}  (${item.reason})`);

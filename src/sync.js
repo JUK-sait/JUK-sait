@@ -63,6 +63,8 @@ export class DriveSync {
     this.concurrency = concurrency;
     /** @type {{ version: number, remoteRoot: string, entries: Record<string, any> }} */
     this.manifest = { version: 1, remoteRoot: this.remoteRoot, entries: {} };
+    /** @type {string[]} */
+    this.warnings = [];
   }
 
   /** 除外対象か。 */
@@ -76,10 +78,20 @@ export class DriveSync {
   }
 
   async loadManifest() {
+    this.warnings = [];
     try {
       const raw = await readFile(this.manifestPath, 'utf8');
       const parsed = JSON.parse(raw);
       if (parsed && typeof parsed === 'object' && parsed.entries) {
+        if (parsed.remoteRoot && parsed.remoteRoot !== this.remoteRoot) {
+          // 別のリモートを指すマニフェストを使い回すと、存在しないファイルを
+          // 「リモートで削除された」と誤判定してローカルを消してしまう。
+          this.warnings.push(
+            `マニフェストの remoteRoot (${parsed.remoteRoot}) が現在の指定 (${this.remoteRoot}) と異なるため、差分情報をリセットしました`,
+          );
+          this.manifest = { version: 1, remoteRoot: this.remoteRoot, entries: {} };
+          return this.manifest;
+        }
         this.manifest = { version: 1, remoteRoot: this.remoteRoot, ...parsed };
       }
     } catch (error) {
@@ -412,6 +424,7 @@ export class DriveSync {
       conflicts: [],
       skipped: [],
       errors: [],
+      warnings: [],
     };
     const context = {
       direction,
@@ -422,6 +435,7 @@ export class DriveSync {
     };
 
     await this.loadManifest();
+    report.warnings = [...(this.warnings ?? [])];
     const changes = await this.compare({ verifyContent: options.verifyContent });
     const tasks = [];
     for (const change of changes) {

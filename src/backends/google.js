@@ -62,7 +62,12 @@ async function safeReadJson(response) {
  * @param {string} contentType
  * @returns {{ body: Buffer, contentType: string }}
  */
-export function buildMultipartBody(metadata, content, contentType = 'application/octet-stream') {
+export function buildMultipartBody(
+  metadata,
+  content,
+  contentType = 'application/octet-stream',
+  options = {},
+) {
   const boundary = `gdrivefs-${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
   const parts = [];
   parts.push(
@@ -73,7 +78,7 @@ export function buildMultipartBody(metadata, content, contentType = 'application
       'utf8',
     ),
   );
-  if (content && content.length > 0) {
+  if (content && (content.length > 0 || options.includeEmptyMedia)) {
     parts.push(
       Buffer.from(`--${boundary}\r\ncontent-type: ${contentType}\r\n\r\n`, 'utf8'),
       content,
@@ -118,6 +123,7 @@ export class GoogleDriveBackend extends DriveBackend {
       supportsAllDrives,
       includeItemsFromAllDrives,
       fetchRootIdOnDemand = true,
+      emptyUploadStrategy = 'multipart',
     } = params;
     if (!tokenProvider || typeof tokenProvider.getToken !== 'function') {
       throw new ApiError('tokenProvider が必要です (GoogleDriveBackend)');
@@ -133,6 +139,8 @@ export class GoogleDriveBackend extends DriveBackend {
     this.supportsAllDrives = supportsAllDrives ?? true;
     this.includeItemsFromAllDrives = includeItemsFromAllDrives ?? Boolean(sharedDriveId);
     this.fetchRootIdOnDemand = fetchRootIdOnDemand;
+    // 空内容での上書きを multipart で送るか ('multipart' | 'metadata-only')
+    this.emptyUploadStrategy = emptyUploadStrategy;
     this.stats = { requests: 0, retries: 0, uploads: 0, downloads: 0 };
     if (typeof this._fetch !== 'function') {
       throw new ApiError('fetch が利用できません (Node 18 以降が必要です)');
@@ -185,6 +193,7 @@ export class GoogleDriveBackend extends DriveBackend {
 
     const maxAttempts = noRetry ? 1 : this.maxRetries;
     let lastError;
+    let authRetried = false;
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       let token;
       try {
@@ -224,7 +233,15 @@ export class GoogleDriveBackend extends DriveBackend {
         if (kind === 'buffer') return Buffer.from(await response.arrayBuffer());
         if (response.status === 204) return null;
         const text = await response.text();
-        return text ? JSON.parse(text) : null;
+        if (!text) return null;
+        try {
+          return JSON.parse(text);
+        } catch (error) {
+          throw new ApiError(
+            `Drive API が不正な JSON を返しました (${response.status}): ${text.slice(0, 120)}`,
+            { status: response.status, retryable: false, cause: error },
+          );
+        }
       }
 
       const retryAfter = Number(response.headers?.get?.('retry-after') ?? 0);
@@ -233,7 +250,8 @@ export class GoogleDriveBackend extends DriveBackend {
       const message =
         errorBody?.error?.message ?? `Drive API エラー: ${response.status} ${response.statusText}`;
 
-      if (response.status === 401 && attempt < maxAttempts) {
+      if (response.status === 401 && !authRetried && attempt < maxAttempts) {
+        authRetried = true;
         this.tokenProvider.invalidate?.();
         this.stats.retries += 1;
         await sleep(backoffDelay(attempt, { baseMs: this.baseDelayMs }));
@@ -358,11 +376,15 @@ export class GoogleDriveBackend extends DriveBackend {
       removeParents,
     };
     const body = content === undefined || content === null ? null : toBuffer(content);
+    const uploadEmpty = this.emptyUploadStrategy === 'multipart';
+    const shouldUploadMedia = body !== null && (body.length > 0 || uploadEmpty);
 
     let data;
-    if (body && body.length > 0) {
+    if (shouldUploadMedia) {
       this.stats.uploads += 1;
-      const multipart = buildMultipartBody(metadata, body, mimeType ?? 'application/octet-stream');
+      const multipart = buildMultipartBody(metadata, body, mimeType ?? 'application/octet-stream', {
+        includeEmptyMedia: true,
+      });
       data = await this._request('PATCH', `/upload/drive/v3/files/${encodeURIComponent(id)}`, {
         query: { ...query, uploadType: 'multipart' },
         body: multipart.body,

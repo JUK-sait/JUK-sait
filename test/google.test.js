@@ -260,6 +260,59 @@ describe('GoogleDriveBackend リクエスト生成', () => {
 });
 
 
+describe('GoogleDriveBackend 空内容と異常応答', () => {
+  it('空の内容でも multipart で送って切り詰める', async () => {
+    const fetchImpl = mockFetch(() => ({ json: FILE_JSON }));
+    const backend = makeBackend(fetchImpl);
+    await backend.updateFile({ id: 'file-1', content: Buffer.alloc(0) });
+    const request = fetchImpl.requests[0];
+    assert.equal(request.url.pathname, '/upload/drive/v3/files/file-1');
+    assert.equal(request.url.searchParams.get('uploadType'), 'multipart');
+  });
+
+  it('emptyUploadStrategy: metadata-only なら本文を送らない', async () => {
+    const fetchImpl = mockFetch(() => ({ json: FILE_JSON }));
+    const backend = makeBackend(fetchImpl, { emptyUploadStrategy: 'metadata-only' });
+    await backend.updateFile({ id: 'file-1', content: Buffer.alloc(0) });
+    assert.equal(fetchImpl.requests[0].url.pathname, '/drive/v3/files/file-1');
+  });
+
+  it('200 でも壊れた JSON なら ApiError にする', async () => {
+    const backend = makeBackend(async () => new Response('not json', { status: 200 }));
+    await assert.rejects(
+      () => backend.listChildren('ROOT'),
+      (error) => {
+        assert.ok(error instanceof ApiError);
+        assert.equal(error.status, 200);
+        assert.equal(error.retryable, false);
+        return true;
+      },
+    );
+  });
+
+  it('401 は 1 回だけ再試行して打ち切る', async () => {
+    let invalidated = 0;
+    const provider = new StaticTokenProvider({ accessToken: 'bad' });
+    provider.invalidate = () => {
+      invalidated += 1;
+    };
+    const fetchImpl = mockFetch(() => ({
+      status: 401,
+      json: { error: { message: 'invalid credentials' } },
+    }));
+    const backend = new GoogleDriveBackend({
+      tokenProvider: provider,
+      rootFolderId: 'ROOT',
+      fetchImpl,
+      baseDelayMs: 1,
+      maxRetries: 4,
+    });
+    await assert.rejects(() => backend.listChildren('ROOT'), (error) => error.status === 401);
+    assert.equal(invalidated, 1);
+    assert.equal(fetchImpl.requests.length, 2);
+  });
+});
+
 describe('GoogleDriveBackend リトライとエラー', () => {
   it('429 のあと成功する (Retry-After を尊重)', async () => {
     const fetchImpl = mockFetch((request) =>

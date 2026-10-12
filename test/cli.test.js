@@ -137,6 +137,13 @@ describe('CLI 実行', () => {
     assert.equal(await readFile(path.join(cwd, 'out', 'remote', 'y.txt'), 'utf8'), 'y');
   });
 
+  it('get は絶対パスのローカル宛先も受け付ける', async () => {
+    await fs.writeFile('/remote/x.txt', 'x');
+    const dest = path.join(cwd, 'abs-dest');
+    assert.equal(await run(['get', '/remote', dest]), 0);
+    assert.equal(await readFile(path.join(dest, 'remote', 'x.txt'), 'utf8'), 'x');
+  });
+
   it('--json は機械可読な出力になる', async () => {
     await fs.writeFile('/data/a.txt', 'a');
     assert.equal(await run(['ls', '/data', '--json']), 0);
@@ -191,9 +198,10 @@ describe('CLI 実行', () => {
     assert.match(stderr.text(), /ENOENT/);
   });
 
-  it('引数不足は使用法エラー (終了コード 1)', async () => {
-    assert.equal(await run(['mv', '/only-one']), 1);
+  it('引数不足は使用法エラー (終了コード 2)', async () => {
+    assert.equal(await run(['mv', '/only-one']), 2);
     assert.match(stderr.text(), /EUSAGE/);
+    assert.equal(await run(['cat']), 2);
   });
 
   it('sync は dry-run と通常実行の両方で動く', async () => {

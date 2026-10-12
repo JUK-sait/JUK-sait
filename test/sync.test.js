@@ -218,6 +218,19 @@ describe('DriveSync', () => {
     assert.equal((await sync.status()).summary['remote-only'], undefined);
   });
 
+  it('remoteRoot が変わったマニフェストはリセットして警告する', async () => {
+    await writeFile(path.join(localRoot, 'a.txt'), 'x');
+    await sync.sync({ direction: 'push' });
+
+    const otherSync = new DriveSync({ fs, localRoot, remoteRoot: '/other' });
+    const report = await otherSync.sync({ direction: 'both', delete: true });
+    assert.equal(report.warnings.length, 1);
+    assert.match(report.warnings[0], /remoteRoot/);
+    assert.equal(report.summary.deletedLocal, 0);
+    assert.equal(await readFile(path.join(localRoot, 'a.txt'), 'utf8'), 'x');
+    assert.equal(await fs.readText('/other/a.txt'), 'x');
+  });
+
   it('マニフェストは同期対象から除外される', async () => {
     await writeFile(path.join(localRoot, 'a.txt'), 'x');
     await sync.sync({ direction: 'push' });
