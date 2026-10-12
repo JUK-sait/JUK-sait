@@ -23,8 +23,8 @@
     "README.md"
   ],
   "scripts": {
-    "test": "node --test test/",
-    "test:coverage": "node --test --experimental-test-coverage test/",
+    "test": "node --test test/*.test.js",
+    "test:coverage": "node --test --experimental-test-coverage test/*.test.js",
     "lint": "node --check bin/gdrivefs.js && for f in $(find src test -name '*.js'); do node --check \"$f\" || exit 1; done",
     "cli": "node bin/gdrivefs.js"
   },

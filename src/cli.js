@@ -249,6 +249,29 @@ export async function main(argv, io = {}) {
         return await cmdRm(context);
       case 'mv':
         return await cmdMv(context);
+      case 'cp':
+        return await cmdCp(context);
+      case 'sync':
+        return await cmdSync(context);
+      case 'about':
+        return await cmdAbout(context);
+      default:
+        out.err(`不明なコマンドです: ${command}`);
+        out.err('`gdrivefs help` を参照してください。');
+        return 2;
+    }
+  } catch (error) {
+    if (error instanceof DriveFsError) {
+      out.err(`エラー [${error.code}] ${error.message}`);
+    } else {
+      out.err(`予期しないエラー: ${error?.stack ?? error}`);
+    }
+    return 1;
+  } finally {
+    if (persist) await persist();
+  }
+}
+
 /** フォルダかどうか。 */
 function isFolder(node) {
   return node?.mimeType === FOLDER_MIME;
@@ -388,29 +411,6 @@ async function cmdDu({ fs, out, positionals, flags }) {
   }
   out.out(`${formatBytes(stats.bytes)}\t${stats.files} ファイル\t${stats.folders} フォルダ\t${stats.path}`);
   return 0;
-}
-
-      case 'cp':
-        return await cmdCp(context);
-      case 'sync':
-        return await cmdSync(context);
-      case 'about':
-        return await cmdAbout(context);
-      default:
-        out.err(`不明なコマンドです: ${command}`);
-        out.err('`gdrivefs help` を参照してください。');
-        return 2;
-    }
-  } catch (error) {
-    if (error instanceof DriveFsError) {
-      out.err(`エラー [${error.code}] ${error.message}`);
-    } else {
-      out.err(`予期しないエラー: ${error?.stack ?? error}`);
-    }
-    return 1;
-  } finally {
-    if (persist) await persist();
-  }
 }
 
 /**

@@ -108,7 +108,13 @@ export class DriveSync {
     /** @type {Map<string, any>} */
     const found = new Map();
     const walkDir = async (absoluteDir, relativeDir) => {
-      const entries = await readdir(absoluteDir, { withFileTypes: true });
+      let entries;
+      try {
+        entries = await readdir(absoluteDir, { withFileTypes: true });
+      } catch (error) {
+        if (error?.code === 'ENOENT') return; // 未作成のローカルディレクトリは空として扱う
+        throw error;
+      }
       for (const entry of entries) {
         const relativePath = relativeDir ? `${relativeDir}/${entry.name}` : entry.name;
         if (this.isExcluded(relativePath)) continue;
