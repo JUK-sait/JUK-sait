@@ -247,12 +247,7 @@ export class DriveFs {
     const base = path === '/' ? '' : path;
     return children
       .map((child) => ({ ...child, path: `${base}/${child.name}` }))
-      .sort((a, b) => {
-        const aFolder = DriveFs.isFolder(a) ? 0 : 1;
-        const bFolder = DriveFs.isFolder(b) ? 0 : 1;
-        if (aFolder !== bFolder) return aFolder - bFolder;
-        return a.name.localeCompare(b.name);
-      });
+      .sort(compareNodes);
   }
 
   /**
@@ -325,9 +320,7 @@ export class DriveFs {
     for (let cursor = 0; cursor < queue.length; cursor += 1) {
       const current = queue[cursor];
       if (current.depth >= maxDepth) continue;
-      const children = (await this.backend.listAllChildren(current.id)).sort((a, b) =>
-        a.name.localeCompare(b.name),
-      );
+      const children = (await this.backend.listAllChildren(current.id)).sort(compareNodes);
       for (const child of children) {
         const childPath = current.path === '/' ? `/${child.name}` : `${current.path}/${child.name}`;
         yield { path: childPath, node: { ...child, path: childPath } };
@@ -404,9 +397,7 @@ export class DriveFs {
         modifiedTime: node.modifiedTime,
       };
       if (!DriveFs.isFolder(node) || depth >= maxDepth) return entry;
-      const children = (await this.backend.listAllChildren(node.id)).sort((a, b) =>
-        a.name.localeCompare(b.name),
-      );
+      const children = (await this.backend.listAllChildren(node.id)).sort(compareNodes);
       entry.children = [];
       for (const child of children) {
         const childPath = nodePath === '/' ? `/${child.name}` : `${nodePath}/${child.name}`;
@@ -460,35 +451,47 @@ export class DriveFs {
       const parentId = await this.ensureDir(parentPath, {
         create: options.createParents ?? true,
       });
-      const existing = await this.backend.findChild(parentId, name);
-      if (existing) {
-        if (DriveFs.isFolder(existing)) {
-          throw new NotAFileError(`同名のフォルダが存在します: ${normalized}`, {
-            path: normalized,
-          });
-        }
-        if (options.overwrite === false) {
-          throw new AlreadyExistsError(`既にファイルが存在します: ${normalized}`, {
-            path: normalized,
-          });
-        }
-        const updated = await this.backend.updateFile({
-          id: existing.id,
-          content: body,
-          mimeType,
-          ...(options.appProperties ? { appProperties: options.appProperties } : {}),
-        });
-        return { ...updated, path: normalized };
-      }
-      const created = await this.backend.createFile({
-        name,
-        parentId,
-        mimeType,
-        content: body,
-        appProperties: options.appProperties,
-      });
-      return { ...created, path: normalized };
+      return this._writeUnlocked(normalized, parentId, name, body, mimeType, options);
     });
+  }
+
+  /**
+   * ロック取得済みで呼ぶ内部実装 (appendFile からも使う)。
+   * @param {string} normalized
+   * @param {string} parentId
+   * @param {string} name
+   * @param {Buffer} body
+   * @param {string} mimeType
+   * @param {{ overwrite?: boolean, appProperties?: Record<string,string> }} options
+   * @returns {Promise<DriveNode>}
+   */
+  async _writeUnlocked(normalized, parentId, name, body, mimeType, options = {}) {
+    const existing = await this.backend.findChild(parentId, name);
+    if (existing) {
+      if (DriveFs.isFolder(existing)) {
+        throw new NotAFileError(`同名のフォルダが存在します: ${normalized}`, { path: normalized });
+      }
+      if (options.overwrite === false) {
+        throw new AlreadyExistsError(`既にファイルが存在します: ${normalized}`, {
+          path: normalized,
+        });
+      }
+      const updated = await this.backend.updateFile({
+        id: existing.id,
+        content: body,
+        mimeType,
+        ...(options.appProperties ? { appProperties: options.appProperties } : {}),
+      });
+      return { ...updated, path: normalized };
+    }
+    const created = await this.backend.createFile({
+      name,
+      parentId,
+      mimeType,
+      content: body,
+      appProperties: options.appProperties,
+    });
+    return { ...created, path: normalized };
   }
 
   /**
@@ -525,7 +528,15 @@ export class DriveFs {
         }
         previous = (await this.backend.download(resolved.id)) ?? Buffer.alloc(0);
       }
-      return this.writeFile(normalized, Buffer.concat([previous, addition]));
+      const parentId = await this.ensureDir(pathUtil.dirname(normalized), { create: true });
+      return this._writeUnlocked(
+        normalized,
+        parentId,
+        pathUtil.basename(normalized),
+        Buffer.concat([previous, addition]),
+        guessMimeType(normalized),
+        {},
+      );
     });
   }
 
@@ -668,6 +679,19 @@ export class DriveFs {
     if (await this.exists(input)) return this.stat(input);
     return this.writeFile(input, Buffer.alloc(0), { overwrite: false });
   }
+}
+
+/**
+ * フォルダ優先 → 名前順 の比較関数。
+ * @param {DriveNode} a
+ * @param {DriveNode} b
+ * @returns {number}
+ */
+function compareNodes(a, b) {
+  const aFolder = DriveFs.isFolder(a) ? 0 : 1;
+  const bFolder = DriveFs.isFolder(b) ? 0 : 1;
+  if (aFolder !== bFolder) return aFolder - bFolder;
+  return a.name.localeCompare(b.name);
 }
 
 /**
