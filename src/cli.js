@@ -547,6 +547,12 @@ async function cmdPut({ fs, out, positionals, flags, io }) {
     remoteIsFolder = isFolder(await fs.stat(remote));
   }
 
+  if (sources.length > 1 && !remoteIsFolder) {
+    throw usageError(
+      '複数のファイルをアップロードする場合は、リモート側に既存フォルダか末尾 "/" を指定してください',
+    );
+  }
+
   let uploaded = 0;
   for (const source of sources) {
     if (source === '-') {

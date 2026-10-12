@@ -223,9 +223,9 @@ export class MemoryBackend extends DriveBackend {
     return { ...this.nodes.get(id) };
   }
 
-  async download(id) {
+  async download(id, options = {}) {
     this._record('download', id);
-    const node = this.nodes.get(id);
+    const node = options.node ?? this.nodes.get(id);
     if (!node || node.trashed) return null;
     if (isGoogleNative(node.mimeType)) {
       return Buffer.from(

@@ -159,6 +159,8 @@ export class DriveSync {
       return found;
     }
     for await (const { path: remotePath, node } of this.fs.walk(this.remoteRoot)) {
+      // 同期対象はファイルのみ (フォルダはパスから自動作成される)
+      if (node.mimeType === FOLDER_MIME) continue;
       const relativePath = remotePath
         .slice(this.remoteRoot === '/' ? 1 : this.remoteRoot.length)
         .replace(/^\//, '');

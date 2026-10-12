@@ -206,6 +206,18 @@ describe('DriveSync', () => {
     assert.equal(await fs.readText('/backup/x/keep.txt'), 'keep');
   });
 
+  it('リモートのフォルダは同期対象にしない (エラーにならない)', async () => {
+    await fs.mkdir('/backup/nested');
+    await fs.writeFile('/backup/nested/file.txt', 'x');
+    await writeFile(path.join(localRoot, 'keep.txt'), 'keep');
+
+    const report = await sync.sync({ direction: 'both' });
+    assert.equal(report.summary.errors, 0);
+    assert.equal(report.summary.downloaded, 1);
+    assert.equal(await readFile(path.join(localRoot, 'nested/file.txt'), 'utf8'), 'x');
+    assert.equal((await sync.status()).summary['remote-only'], undefined);
+  });
+
   it('マニフェストは同期対象から除外される', async () => {
     await writeFile(path.join(localRoot, 'a.txt'), 'x');
     await sync.sync({ direction: 'push' });

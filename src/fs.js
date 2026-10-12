@@ -260,7 +260,7 @@ export class DriveFs {
     if (DriveFs.isFolder(node)) {
       throw new NotAFileError(`フォルダは読み込めません: ${path}`, { path });
     }
-    const data = await this.backend.download(node.id);
+    const data = await this.backend.download(node.id, { node });
     if (data === null) throw new NotFoundError(`読み込みに失敗しました: ${path}`, { path });
     return data;
   }

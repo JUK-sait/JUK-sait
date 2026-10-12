@@ -391,8 +391,8 @@ export class GoogleDriveBackend extends DriveBackend {
     return normalizeNode(data);
   }
 
-  async download(id) {
-    const node = await this.getNode(id);
+  async download(id, options = {}) {
+    const node = options.node ?? (await this.getNode(id));
     this.stats.downloads += 1;
     if (!node) return null;
     if (isGoogleNative(node.mimeType)) {

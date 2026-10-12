@@ -101,9 +101,10 @@ export class DriveBackend {
 
   /**
    * @param {string} id
-   * @returns {Promise<Buffer>}
+   * @param {{ node?: DriveNode }} [options] 既知のノードを渡すと余分な取得を省ける
+   * @returns {Promise<Buffer|null>}
    */
-  async download(id) {
+  async download(id, options = {}) {
     throw new NotImplementedError(`download() が実装されていません (id=${id})`);
   }
 

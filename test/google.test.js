@@ -215,6 +215,15 @@ describe('GoogleDriveBackend リクエスト生成', () => {
     );
   });
 
+  it('download に node を渡すと余分なメタデータ取得をしない', async () => {
+    const fetchImpl = mockFetch(() => ({ buffer: Buffer.from('data') }));
+    const backend = makeBackend(fetchImpl);
+    const node = normalizeNode(FILE_JSON);
+    await backend.download('file-1', { node });
+    assert.equal(fetchImpl.requests.length, 1);
+    assert.equal(fetchImpl.requests[0].url.searchParams.get('alt'), 'media');
+  });
+
   it('about は user/storageQuota を取得する', async () => {
     const fetchImpl = mockFetch(() => ({
       json: {
