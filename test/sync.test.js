@@ -231,6 +231,25 @@ describe('DriveSync', () => {
     assert.equal(await fs.readText('/other/a.txt'), 'x');
   });
 
+  it('別の Drive (rootId) のマニフェストはリセットして警告する', async () => {
+    await writeFile(path.join(localRoot, 'a.txt'), 'x');
+    await sync.sync({ direction: 'push' });
+
+    // 同じローカルディレクトリを、別の Drive を指すハンドルで同期する
+    const otherBackendFs = new DriveFs({ backend: new MemoryBackend() });
+    const otherSync = new DriveSync({
+      fs: otherBackendFs,
+      localRoot,
+      remoteRoot: '/backup',
+    });
+    const report = await otherSync.sync({ direction: 'both', delete: true });
+    assert.equal(report.warnings.length, 1);
+    assert.match(report.warnings[0], /rootId/);
+    assert.equal(report.summary.deletedLocal, 0);
+    assert.equal(await readFile(path.join(localRoot, 'a.txt'), 'utf8'), 'x');
+    assert.equal(await otherBackendFs.readText('/backup/a.txt'), 'x');
+  });
+
   it('マニフェストは同期対象から除外される', async () => {
     await writeFile(path.join(localRoot, 'a.txt'), 'x');
     await sync.sync({ direction: 'push' });

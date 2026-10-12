@@ -79,24 +79,34 @@ export class DriveSync {
 
   async loadManifest() {
     this.warnings = [];
+    const rootId = await this.fs.rootId();
     try {
       const raw = await readFile(this.manifestPath, 'utf8');
       const parsed = JSON.parse(raw);
       if (parsed && typeof parsed === 'object' && parsed.entries) {
+        if (parsed.rootId && parsed.rootId !== rootId) {
+          // 別の Drive/アカウントを指すマニフェストを流用すると、
+          // 存在しないファイルを「削除された」と誤判定してしまう。
+          this.warnings.push(
+            `マニフェストの rootId (${parsed.rootId}) が現在のルート (${rootId}) と異なるため、差分情報をリセットしました`,
+          );
+          this.manifest = { version: 1, remoteRoot: this.remoteRoot, rootId, entries: {} };
+          return this.manifest;
+        }
         if (parsed.remoteRoot && parsed.remoteRoot !== this.remoteRoot) {
           // 別のリモートを指すマニフェストを使い回すと、存在しないファイルを
           // 「リモートで削除された」と誤判定してローカルを消してしまう。
           this.warnings.push(
             `マニフェストの remoteRoot (${parsed.remoteRoot}) が現在の指定 (${this.remoteRoot}) と異なるため、差分情報をリセットしました`,
           );
-          this.manifest = { version: 1, remoteRoot: this.remoteRoot, entries: {} };
+          this.manifest = { version: 1, remoteRoot: this.remoteRoot, rootId, entries: {} };
           return this.manifest;
         }
-        this.manifest = { version: 1, remoteRoot: this.remoteRoot, ...parsed };
+        this.manifest = { version: 1, remoteRoot: this.remoteRoot, rootId, ...parsed };
       }
     } catch (error) {
       if (error?.code !== 'ENOENT') throw error;
-      this.manifest = { version: 1, remoteRoot: this.remoteRoot, entries: {} };
+      this.manifest = { version: 1, remoteRoot: this.remoteRoot, rootId, entries: {} };
     }
     return this.manifest;
   }

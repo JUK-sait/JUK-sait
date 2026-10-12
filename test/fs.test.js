@@ -108,15 +108,45 @@ describe('DriveFs 並行実行と自己参照の防止', () => {
     await assert.rejects(() => fs.cp('/a/f.txt', '/a'), AlreadyExistsError);
   });
 
-  it('外部で削除されたフォルダはキャッシュがあっても ENOENT になる', async () => {
+  it('外部で削除されたフォルダはキャッシュ TTL の経過後に ENOENT になる', async () => {
     const backend = new MemoryBackend();
-    const fsA = new DriveFs({ backend });
+    const fsA = new DriveFs({ backend, cacheTtlMs: 0 });
     const fsB = new DriveFs({ backend });
     await fsA.writeFile('/a/f.txt', 'x');
     assert.equal(await fsA.exists('/a'), true);
     await fsB.rm('/a', { recursive: true });
     assert.equal(await fsA.exists('/a'), false);
     await assert.rejects(() => fsA.stat('/a'), NotFoundError);
+  });
+
+  it('書き込みはキャッシュに依存せず常に最新状態で解決する', async () => {
+    const backend = new MemoryBackend();
+    const fsA = new DriveFs({ backend }); // TTL 30 秒
+    const fsB = new DriveFs({ backend });
+    await fsA.mkdir('/a');
+    await fsA.stat('/a'); // キャッシュを作る
+    await fsB.mv('/a', '/c'); // 外部ハンドルでリネーム
+
+    // 古いパスへの書き込みが「移動先に紛れ込む」ことはない
+    await fsA.writeFile('/a/x.txt', 'x');
+    assert.deepEqual(await fsB.list('/c'), [], '移動先のフォルダは無傷');
+    assert.equal(await fsB.readText('/a/x.txt'), 'x', '要求したパスに作られる');
+
+    // createParents:false なら古いパスは素直に ENOENT
+    await fsB.mv('/a', '/d');
+    await assert.rejects(
+      () => fsA.writeFile('/a/y.txt', 'y', { createParents: false }),
+      NotFoundError,
+    );
+  });
+
+  it('同名のファイルとフォルダを並行作成しても共存しない', async () => {
+    for (let i = 0; i < 10; i += 1) {
+      const fs = makeFs();
+      await Promise.allSettled([fs.writeFile('/x', 'file'), fs.mkdir('/x')]);
+      const sameName = (await fs.list('/')).filter((n) => n.name === 'x');
+      assert.equal(sameName.length, 1, `試行 ${i}: 同名ノードが ${sameName.length} 件`);
+    }
   });
 });
 

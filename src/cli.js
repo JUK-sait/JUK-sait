@@ -224,6 +224,14 @@ export async function main(argv, io = {}) {
     return 1;
   }
 
+  try {
+    validateOptions(options);
+  } catch (error) {
+    out.err(error.message);
+    out.err('`gdrivefs help` を参照してください。');
+    return 2;
+  }
+
   const context = { fs, out, flags, options, positionals, io, env };
   try {
     switch (command) {
@@ -267,6 +275,9 @@ export async function main(argv, io = {}) {
         out.err('`gdrivefs help` を参照してください。');
         return 2;
       }
+    } else if (error && typeof error.code === 'string' && error.syscall) {
+      // ファイルシステム由来のエラー (EACCES, ENOSPC など) は簡潔に出す
+      out.err(`エラー [${error.code}] ${error.message}`);
     } else {
       out.err(`予期しないエラー: ${error?.stack ?? error}`);
     }
@@ -459,6 +470,30 @@ export async function buildFsContext({ flags, options, env }) {
  */
 export async function buildFs(params) {
   return (await buildFsContext(params)).fs;
+}
+
+/**
+ * オプションの値を検証する (不正なら EUSAGE)。
+ * @param {Record<string, string>} options
+ */
+export function validateOptions(options = {}) {
+  const enums = {
+    direction: ['push', 'pull', 'both'],
+    conflict: ['skip', 'local', 'remote', 'newest'],
+    type: ['file', 'folder'],
+  };
+  for (const [key, allowed] of Object.entries(enums)) {
+    if (options[key] !== undefined && !allowed.includes(options[key])) {
+      throw usageError(`--${key} は ${allowed.join(' | ')} のいずれかです: ${options[key]}`);
+    }
+  }
+  for (const key of ['depth', 'concurrency']) {
+    if (options[key] === undefined) continue;
+    const value = Number(options[key]);
+    if (!Number.isInteger(value) || value <= 0) {
+      throw usageError(`--${key} は 1 以上の整数で指定してください: ${options[key]}`);
+    }
+  }
 }
 
 /** 使用法エラーを作る。 */

@@ -27,7 +27,7 @@ gdrivefs sync ./data /backup --delete       # 双方向ミラー
 ```bash
 git clone https://github.com/JUK-sait/JUK-sait.git gdrivefs
 cd gdrivefs
-npm test          # 認証不要。123 件のテストが走ります
+npm test          # 認証不要。129 件のテストが走ります
 npm link          # `gdrivefs` コマンドを PATH に入れる場合
 ```
 
@@ -134,7 +134,7 @@ gdrivefs sync /backup ./data --direction pull --conflict remote
 ## テスト
 
 ```bash
-npm test              # node:test による 123 件
+npm test              # node:test による 129 件
 npm run lint          # 全ファイルの構文チェック
 npm run test:coverage
 ```

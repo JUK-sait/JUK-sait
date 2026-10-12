@@ -42,30 +42,51 @@ export class DriveFs {
     this.cacheTtlMs = cacheTtlMs;
     this.defaultPageSize = defaultPageSize;
     this.maxCacheEntries = maxCacheEntries;
-    /** @type {Map<string, { id: string, expiresAt: number }>} パス -> フォルダ ID */
-    this._dirCache = new Map();
+    /** @type {Map<string, { children: Map<string, DriveNode>, expiresAt: number }>} 親ID -> 子の名前表 */
+    this._listingCache = new Map();
     /** @type {Map<string, Promise<unknown>>} パス単位の排他制御 */
     this._locks = new Map();
   }
 
   /** キャッシュを捨てる。 */
   invalidateCache() {
-    this._dirCache.clear();
+    this._listingCache.clear();
   }
 
   /**
-   * 解決結果をキャッシュする (上限を超えたら古いものから捨てる)。
-   * @param {string} key
-   * @param {string} id
+   * 親フォルダの子リストを取得する (TTL 付きキャッシュ)。
+   *
+   * パス解決は「親の子リストから名前で引く」だけなので、
+   * 深いパスでも 1 ディレクトリ 1 リクエストで済み、TTL 内の再解決は 0 リクエストになる。
+   * 書き込み系は `fresh: true` でキャッシュを迂回し、常に最新の状態で解決する。
+   *
+   * @param {string} parentId
+   * @param {{ fresh?: boolean }} [options]
+   * @returns {Promise<Map<string, DriveNode>>}
    */
-  _cacheSet(key, id) {
-    this._dirCache.delete(key);
-    this._dirCache.set(key, { id, expiresAt: Date.now() + this.cacheTtlMs });
-    while (this._dirCache.size > this.maxCacheEntries) {
-      const oldest = this._dirCache.keys().next();
-      if (oldest.done) break;
-      this._dirCache.delete(oldest.value);
+  async _childrenOf(parentId, options = {}) {
+    if (!options.fresh) {
+      const cached = this._listingCache.get(parentId);
+      if (cached && cached.expiresAt > Date.now()) return cached.children;
     }
+    const nodes = await this.backend.listAllChildren(parentId);
+    const children = new Map();
+    for (const node of nodes) {
+      if (node.trashed) continue;
+      // 同名重複は最初の 1 件を採用 (§5 の制約)
+      if (!children.has(node.name)) children.set(node.name, node);
+    }
+    this._listingCache.delete(parentId);
+    this._listingCache.set(parentId, {
+      children,
+      expiresAt: Date.now() + this.cacheTtlMs,
+    });
+    while (this._listingCache.size > this.maxCacheEntries) {
+      const oldest = this._listingCache.keys().next();
+      if (oldest.done) break;
+      this._listingCache.delete(oldest.value);
+    }
+    return children;
   }
 
   /** ルートの ID。 */
@@ -79,7 +100,7 @@ export class DriveFs {
   /**
    * パスから Drive ノードを解決する。
    * @param {string} input
-   * @param {{ mustExist?: boolean }} [options]
+   * @param {{ mustExist?: boolean, fresh?: boolean }} [options] fresh: true でキャッシュを迂回
    * @returns {Promise<{ path: string, id: string|null, node: DriveNode|null, parentId?: string }>}
    */
   async resolve(input, options = {}) {
@@ -107,19 +128,8 @@ export class DriveFs {
       currentPath = `${currentPath}/${segment}`;
       const isLast = i === parts.length - 1;
 
-      const cached = this._dirCache.get(currentPath);
-      if (cached && cached.expiresAt > Date.now()) {
-        const cachedNode = await this.backend.getNode(cached.id);
-        if (cachedNode) {
-          parentId = cached.id;
-          if (isLast) lastNode = cachedNode;
-          continue;
-        }
-        // 外部 (別プロセス/Web UI) で削除されていた場合はキャッシュを捨てて辿り直す
-        this._dirCache.delete(currentPath);
-      }
-
-      const child = await this.backend.findChild(parentId, segment);
+      const children = await this._childrenOf(parentId, { fresh: options.fresh });
+      const child = children.get(segment);
       if (!child) {
         if (!mustExist && isLast) {
           return { path: normalized, id: null, node: null, parentId };
@@ -130,9 +140,6 @@ export class DriveFs {
         throw new NotADirectoryError(`フォルダではありません: ${currentPath}`, {
           path: currentPath,
         });
-      }
-      if (child.mimeType === FOLDER_MIME) {
-        this._cacheSet(currentPath, child.id);
       }
       parentId = child.id;
       lastNode = child;
@@ -159,6 +166,7 @@ export class DriveFs {
    */
   async ensureDir(input, options = {}) {
     const create = options.create ?? true;
+    const fresh = options.fresh ?? false;
     const normalized = pathUtil.normalize(input);
     if (normalized === '/') return this.rootId();
     let parentId = await this.rootId();
@@ -167,27 +175,25 @@ export class DriveFs {
       pathUtil.validateSegment(segment);
       currentPath = `${currentPath}/${segment}`;
       const parent = parentId;
-      // 同じフォルダを並行して作ると Drive 上に同名フォルダが量産されるため直列化する
-      parentId = await this._withLock(`dir:${currentPath}`, async () => {
-        const cached = this._dirCache.get(currentPath);
-        if (cached && cached.expiresAt > Date.now()) return cached.id;
-        const existing = await this.backend.findChild(parent, segment);
-        let id;
+      // 同じパスを並行して作ると Drive 上に同名フォルダが量産されるため、
+      // ファイル書き込みと同じロックキー (パス) で直列化する。
+      parentId = await this._withLock(currentPath, async () => {
+        const children = await this._childrenOf(parent, { fresh });
+        const existing = children.get(segment);
         if (existing) {
           if (existing.mimeType !== FOLDER_MIME) {
             throw new NotADirectoryError(`フォルダではありません: ${currentPath}`, {
               path: currentPath,
             });
           }
-          id = existing.id;
-        } else if (create) {
-          const created = await this.backend.createFolder({ name: segment, parentId: parent });
-          id = created.id;
-        } else {
+          return existing.id;
+        }
+        if (!create) {
           throw new NotFoundError(`フォルダがありません: ${currentPath}`, { path: currentPath });
         }
-        this._cacheSet(currentPath, id);
-        return id;
+        const created = await this.backend.createFolder({ name: segment, parentId: parent });
+        children.set(segment, created); // キャッシュにも反映
+        return created.id;
       });
     }
     return parentId;
@@ -233,6 +239,16 @@ export class DriveFs {
    */
   async stat(input) {
     const { node, path } = await this.resolve(input, { mustExist: true });
+    return { ...node, path };
+  }
+
+  /**
+   * キャッシュを使わずに最新状態を取得する (書き込み系の内部処理用)。
+   * @param {string} input
+   * @returns {Promise<DriveNode>}
+   */
+  async statFresh(input) {
+    const { node, path } = await this.resolve(input, { mustExist: true, fresh: true });
     return { ...node, path };
   }
 
@@ -440,7 +456,7 @@ export class DriveFs {
   async mkdir(input) {
     const normalized = pathUtil.normalize(input);
     if (normalized === '/') return this.stat('/');
-    await this.ensureDir(normalized, { create: true });
+    await this.ensureDir(normalized, { create: true, fresh: true });
     const node = await this.stat(normalized);
     if (!DriveFs.isFolder(node)) {
       throw new NotADirectoryError(`同名のファイルが既にあります: ${normalized}`, {
@@ -472,6 +488,7 @@ export class DriveFs {
     return this._withLock(normalized, async () => {
       const parentId = await this.ensureDir(parentPath, {
         create: options.createParents ?? true,
+        fresh: true,
       });
       return this._writeUnlocked(normalized, parentId, name, body, mimeType, options);
     });
@@ -488,7 +505,8 @@ export class DriveFs {
    * @returns {Promise<DriveNode>}
    */
   async _writeUnlocked(normalized, parentId, name, body, mimeType, options = {}) {
-    const existing = await this.backend.findChild(parentId, name);
+    const children = await this._childrenOf(parentId, { fresh: true });
+    const existing = children.get(name);
     if (existing) {
       if (DriveFs.isFolder(existing)) {
         throw new NotAFileError(`同名のフォルダが存在します: ${normalized}`, { path: normalized });
@@ -507,6 +525,7 @@ export class DriveFs {
         ...(shouldSendMime ? { mimeType } : {}),
         ...(options.appProperties ? { appProperties: options.appProperties } : {}),
       });
+      children.set(name, updated);
       return { ...updated, path: normalized };
     }
     const created = await this.backend.createFile({
@@ -516,6 +535,7 @@ export class DriveFs {
       content: body,
       appProperties: options.appProperties,
     });
+    children.set(name, created);
     return { ...created, path: normalized };
   }
 
@@ -544,7 +564,7 @@ export class DriveFs {
     const addition = toBuffer(content) ?? Buffer.alloc(0);
     return this._withLock(normalized, async () => {
       let previous = Buffer.alloc(0);
-      const resolved = await this.resolve(normalized, { mustExist: false });
+      const resolved = await this.resolve(normalized, { mustExist: false, fresh: true });
       if (resolved.node) {
         if (DriveFs.isFolder(resolved.node)) {
           throw new NotAFileError(`フォルダには追記できません: ${normalized}`, {
@@ -576,7 +596,7 @@ export class DriveFs {
     if (normalized === '/') throw new NotAFileError('ルートは削除できません', { path: normalized });
     let resolved;
     try {
-      resolved = await this.resolve(normalized, { mustExist: true });
+      resolved = await this.resolve(normalized, { mustExist: true, fresh: true });
     } catch (error) {
       if (error instanceof NotFoundError && options.force) return false;
       throw error;
@@ -596,7 +616,6 @@ export class DriveFs {
     } else {
       await this.backend.deleteNode(resolved.id);
     }
-    this._dirCache.delete(normalized);
     this.invalidateCache();
     return true;
   }
@@ -614,7 +633,7 @@ export class DriveFs {
     if (source === target) return this.stat(source);
     if (source === '/') throw new NotAFileError('ルートは移動できません', { path: source });
 
-    const resolved = await this.resolve(source, { mustExist: true });
+    const resolved = await this.resolve(source, { mustExist: true, fresh: true });
     const sourceNode = resolved.node;
 
     // 移動先が既存フォルダなら、その中に元の名前で入れる
@@ -623,6 +642,9 @@ export class DriveFs {
       if (DriveFs.isFolder(targetNode)) target = pathUtil.join(target, sourceNode.name);
     }
 
+    if (target === source) {
+      throw new AlreadyExistsError(`移動元と移動先が同じです: ${source}`, { path: source });
+    }
     if (DriveFs.isFolder(sourceNode) && pathUtil.contains(source, target)) {
       throw new InvalidPathError(
         `フォルダを自分自身の配下へ移動できません: ${source} -> ${target}`,
@@ -635,8 +657,8 @@ export class DriveFs {
     pathUtil.validateSegment(targetName);
 
     return this._withLock(target, async () => {
-      const parentId = await this.ensureDir(targetParent, { create: true });
-      const existing = await this.backend.findChild(parentId, targetName);
+      const parentId = await this.ensureDir(targetParent, { create: true, fresh: true });
+      const existing = (await this._childrenOf(parentId, { fresh: true })).get(targetName);
       if (existing && existing.id !== resolved.id) {
         if (options.overwrite === false) {
           throw new AlreadyExistsError(`移動先に既に存在します: ${target}`, { path: target });
@@ -668,10 +690,10 @@ export class DriveFs {
     const source = pathUtil.normalize(from);
     let target = pathUtil.normalize(to);
     if (source === target) throw new AlreadyExistsError('同一パスにはコピーできません', { path: source });
-    const sourceNode = await this.stat(source);
+    const sourceNode = await this.statFresh(source);
 
     if (await this.exists(target)) {
-      const targetNode = await this.stat(target);
+      const targetNode = await this.statFresh(target);
       if (DriveFs.isFolder(targetNode)) target = pathUtil.join(target, sourceNode.name);
     }
 

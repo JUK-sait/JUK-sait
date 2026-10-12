@@ -223,6 +223,28 @@ describe('CLI 実行', () => {
     assert.match(stdout.text(), /完了: 送信 0/);
   });
 
+  it('オプションの値が不正なら終了コード 2', async () => {
+    assert.equal(await run(['sync', '.', '/backup', '--direction', 'bogus']), 2);
+    assert.match(stderr.text(), /--direction/);
+    stderr = collector();
+    assert.equal(await run(['find', '/', '--type', 'weird']), 2);
+    assert.match(stderr.text(), /--type/);
+    stderr = collector();
+    assert.equal(await run(['sync', '.', '/backup', '--concurrency', 'abc']), 2);
+    assert.match(stderr.text(), /--concurrency/);
+  });
+
+  it('未作成のローカルディレクトリは空として同期できる', async () => {
+    assert.equal(await run(['sync', 'no-such-dir', '/backup']), 0);
+    assert.match(stdout.text(), /完了: 送信 0/);
+  });
+
+  it('ファイルシステム由来のエラーはスタックを出さず簡潔に表示する', async () => {
+    assert.equal(await run(['put', 'no-such-local.txt', '/x.txt']), 1);
+    assert.match(stderr.text(), /エラー \[ENOENT\]/);
+    assert.doesNotMatch(stderr.text(), /at async/);
+  });
+
   it('about はユーザ情報を表示する', async () => {
     assert.equal(await run(['about']), 0);
     assert.match(stdout.text(), /Memory User/);
