@@ -1,0 +1,40 @@
+{
+  "name": "gdrivefs",
+  "version": "0.1.0",
+  "description": "Google Drive のフォルダをファイルシステムのように読み書きするシステム (library + CLI)",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.17"
+  },
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./backends/memory": "./src/backends/memory.js",
+    "./backends/google": "./src/backends/google.js"
+  },
+  "bin": {
+    "gdrivefs": "./bin/gdrivefs.js"
+  },
+  "files": [
+    "bin",
+    "src",
+    "docs",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test test/",
+    "test:coverage": "node --test --experimental-test-coverage test/",
+    "lint": "node --check bin/gdrivefs.js && for f in $(find src test -name '*.js'); do node --check \"$f\" || exit 1; done",
+    "cli": "node bin/gdrivefs.js"
+  },
+  "keywords": [
+    "google-drive",
+    "drive-api",
+    "filesystem",
+    "cli",
+    "sync"
+  ],
+  "dependencies": {},
+  "devDependencies": {}
+}

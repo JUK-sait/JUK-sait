@@ -1,0 +1,12 @@
+node_modules/
+*.log
+.DS_Store
+.env
+.env.*
+!.env.example
+credentials*.json
+service-account*.json
+*.pem
+coverage/
+.gdrivefs-cache/
+tmp/
