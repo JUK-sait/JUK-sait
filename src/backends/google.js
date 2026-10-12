@@ -12,7 +12,13 @@
 
 import { FOLDER_MIME, isGoogleNative, resolveExportMimeType } from '../mime.js';
 import { ApiError } from '../errors.js';
-import { backoffDelay, isRetryableStatus, sleep, Semaphore } from '../util.js';
+import {
+  backoffDelay,
+  escapeQueryLiteral,
+  isRetryableStatus,
+  sleep,
+  Semaphore,
+} from '../util.js';
 import { toBuffer } from '../bytes.js';
 import { DriveBackend } from './base.js';
 

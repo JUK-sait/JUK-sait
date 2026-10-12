@@ -296,6 +296,45 @@ export class MemoryBackend extends DriveBackend {
     this.nodes.delete(id);
     this.blobs.delete(id);
   }
+
+  /**
+   * 状態を JSON 化できる形で書き出す (`--memory-file` 用)。
+   * @returns {{ rootId: string, nodes: Array<[string, any]>, blobs: Array<[string, string]> }}
+   */
+  toSerializable() {
+    return {
+      rootId: this._rootId,
+      nodes: [...this.nodes.entries()].map(([k, v]) => [k, { ...v }]),
+      blobs: [...this.blobs.entries()].map(([k, v]) => [k, v.toString('base64')]),
+    };
+  }
+
+  /** 状態を JSON 文字列にする。 */
+  serialize() {
+    return `${JSON.stringify(this.toSerializable())}\n`;
+  }
+
+  /**
+   * `toSerializable()` の出力からバックエンドを復元する。
+   * @param {{ rootId?: string, nodes?: Array<[string, any]>, blobs?: Array<[string, string]> }} data
+   * @param {() => Date} [now]
+   * @returns {MemoryBackend}
+   */
+  static fromSerializable(data, now) {
+    const backend = new MemoryBackend(now ? { now } : {});
+    if (data?.rootId) backend._rootId = data.rootId;
+    backend.nodes = new Map((data?.nodes ?? []).map(([k, v]) => [k, { ...v }]));
+    backend.blobs = new Map((data?.blobs ?? []).map(([k, v]) => [k, Buffer.from(v, 'base64')]));
+    // 生成済み ID と衝突しないよう連番を進める
+    let maxSeq = seq;
+    for (const id of backend.nodes.keys()) {
+      const match = /-(\d+)$/.exec(id);
+      if (match) maxSeq = Math.max(maxSeq, Number(match[1]));
+    }
+    seq = maxSeq;
+    return backend;
+  }
+
 }
 
 export { toBuffer };
